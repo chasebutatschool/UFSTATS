@@ -1,14 +1,12 @@
 {
   "name": "uf-stat-bot",
   "version": "1.0.0",
-  "description": "Universe Football Stat Tracking Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.0.0",
-    "dotenv": "^16.0.0",
     "fs-extra": "^11.0.0",
     "tesseract.js": "^5.0.0"
   }
