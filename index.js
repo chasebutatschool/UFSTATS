@@ -76,7 +76,16 @@ client.on('messageCreate', async (message) => {
     }
 
     if (playerName === "Unknown") {
-      return message.reply("❌ Could not read player name! Try scanning again.");
+      return message.reply("❌ Could not read player name!");
+    }
+
+    // Check if we got actual stats
+    const totalVals = Object.values(combinedStats).reduce((acc, cat) => {
+      return acc + Object.values(cat).reduce((a, v) => a + v, 0);
+    }, 0);
+
+    if (totalVals === 0) {
+      return message.reply(`❌ Could not read stats numbers!\n\nPlayer found: **${playerName}**\nBut no stats detected.`);
     }
 
     data[playerName] = mergeStats(data[playerName] || {}, combinedStats);
@@ -113,85 +122,91 @@ function mergeStats(existing, newStats) {
 async function scanImage(imageUrl) {
   try {
     const { data: { text } } = await Tesseract.recognize(imageUrl, 'eng');
-    return parseTableStats(text);
+    console.log("RAW:", text);
+    return parseSmart(text);
   } catch (err) {
     console.error("Scan error:", err);
     return null;
   }
 }
 
-function parseTableStats(text) {
+function parseSmart(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   let playerName = "Unknown";
   let stats = {};
   let currentCategory = null;
   
-  // Column mappings
-  const passingCols = ['CMP', 'ATT', 'YARDS', 'TDS', 'INTS', 'FUMBLES'];
-  const receivingCols = ['RECS', 'YARDS', 'TDS', 'FUMBLES'];
-  const rushingCols = ['ATT', 'YARDS', 'TDS', 'FUMBLES'];
-  const defenseCols = ['TACKLES', 'SACKS', 'INT', 'DEFLECTIONS', 'FUMBLES'];
-  
-  // Find category
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const upper = line.toUpperCase();
     
-    if (upper.includes('PASSING')) currentCategory = 'Passing';
-    else if (upper.includes('RECEIVING')) currentCategory = 'Receiving';
-    else if (upper.includes('RUSHING')) currentCategory = 'Rushing';
-    else if (upper.includes('DEFENSE') || upper.includes('D-LINE') || upper.includes('CORNERBACK')) {
+    // Detect category
+    if (upper.includes('PASSING') && !upper.includes('PLAYER')) {
+      currentCategory = 'Passing';
+    } else if (upper.includes('RECEIVING')) {
+      currentCategory = 'Receiving';
+    } else if (upper.includes('RUSHING')) {
+      currentCategory = 'Rushing';
+    } else if (upper.includes('DEFENSE') || upper.includes('D-LINE') || upper.includes('CORNERBACK')) {
       currentCategory = 'Defense';
     }
-    // Check if line has player name (text then numbers)
-    else if (currentCategory && line.match(/^[A-Za-z].+\d+/)) {
-      // This is a data row!
-      const parts = line.split(/\s+/).filter(p => p);
+    
+    // Skip header lines
+    if (upper.includes('PLAYER:') || upper.includes('CMP') || upper.includes('ATT') || upper.includes('YARDS')) {
+      continue;
+    }
+    
+    // Find data line: has letters AND numbers
+    if (currentCategory && line.match(/[A-Za-z]/) && line.match(/\d\d+/)) {
+      // Extract ALL numbers from this line
+      const numbers = line.match(/\d+/g);
       
-      // First part is usually player name, rest are numbers
-      if (playerName === "Unknown" && parts.length > 1) {
-        // Check if first part looks like a name
-        if (!parts[0].match(/^\d+$/)) {
-          playerName = parts[0].replace(/[^a-zA-Z]/g, '');
+      if (numbers && numbers.length > 0) {
+        // First try to find player name
+        const words = line.split(/\s+/).filter(w => w.match(/[A-Za-z]/));
+        for (const word of words) {
+          if (!word.toUpperCase().includes('PLAYER') && word.length > 2) {
+            playerName = word.replace(/[^a-zA-Z]/g, '');
+            break;
+          }
         }
-      }
-      
-      // Get all numbers from the line
-      const numbers = line.match(/\d+/g) || [];
-      
-      if (currentCategory === 'Passing' && numbers.length >= 2) {
-        stats.Passing = {
-          CMP: parseInt(numbers[0]) || 0,
-          ATT: parseInt(numbers[1]) || 0,
-          YARDS: parseInt(numbers[2]) || 0,
-          TDS: parseInt(numbers[3]) || 0,
-          INTS: parseInt(numbers[4]) || 0
-        };
-      }
-      else if (currentCategory === 'Receiving' && numbers.length >= 2) {
-        stats.Receiving = {
-          RECS: parseInt(numbers[0]) || 0,
-          YARDS: parseInt(numbers[1]) || 0,
-          TDS: parseInt(numbers[2]) || 0
-        };
-      }
-      else if (currentCategory === 'Rushing' && numbers.length >= 2) {
-        stats.Rushing = {
-          ATT: parseInt(numbers[0]) || 0,
-          YARDS: parseInt(numbers[1]) || 0,
-          TDS: parseInt(numbers[2]) || 0
-        };
-      }
-      else if (currentCategory === 'Defense' && numbers.length >= 2) {
-        stats.Defense = {
-          TACKLES: parseInt(numbers[0]) || 0,
-          SACKS: parseInt(numbers[1]) || 0,
-          INT: parseInt(numbers[2]) || 0
-        };
+        
+        // Map numbers to stats based on category
+        if (currentCategory === 'Passing' && numbers.length >= 2) {
+          stats.Passing = {
+            CMP: parseInt(numbers[0]) || 0,
+            ATT: parseInt(numbers[1]) || 0,
+            YARDS: parseInt(numbers[2]) || 0,
+            TDS: parseInt(numbers[3]) || 0,
+            INTS: parseInt(numbers[4]) || 0
+          };
+        }
+        else if (currentCategory === 'Receiving' && numbers.length >= 1) {
+          stats.Receiving = {
+            RECS: parseInt(numbers[0]) || 0,
+            YARDS: parseInt(numbers[1]) || 0,
+            TDS: parseInt(numbers[2]) || 0
+          };
+        }
+        else if (currentCategory === 'Rushing' && numbers.length >= 1) {
+          stats.Rushing = {
+            ATT: parseInt(numbers[0]) || 0,
+            YARDS: parseInt(numbers[1]) || 0,
+            TDS: parseInt(numbers[2]) || 0
+          };
+        }
+        else if (currentCategory === 'Defense' && numbers.length >= 1) {
+          stats.Defense = {
+            TACKLES: parseInt(numbers[0]) || 0,
+            SACKS: parseInt(numbers[1]) || 0,
+            INT: parseInt(numbers[2]) || 0
+          };
+        }
       }
     }
   }
   
-  console.log("Parsed:", playerName, stats);
+  console.log("Result:", playerName, stats);
   
   if (Object.keys(stats).length === 0) return null;
   
