@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const fs = require('fs-extra');
+const Tesseract = require('tesseract.js');
 
 const client = new Client({
   intents: [
@@ -19,7 +20,7 @@ async function init() {
 }
 init();
 
-client.once('ready', () => console.log(`Logged in as ${client.user.tag}`));
+client.once('clientReady', () => console.log(`Logged in as ${client.user.tag}`));
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
@@ -58,14 +59,24 @@ client.on('messageCreate', async (message) => {
   }
 
   if (content.startsWith('!scan') && message.attachments.size > 0) {
+    await message.reply("🤖 Scanning images... please wait...");
+    
     const attachments = [...message.attachments.values()];
     let combinedStats = {};
     let playerName = "Unknown";
 
     for (let i = 0; i < attachments.length; i++) {
-      const result = parseFakeStats(i);
-      playerName = result.name;
-      combinedStats = mergeStats(combinedStats, result.stats);
+      const url = attachments[i].url;
+      const result = await scanImage(url);
+      
+      if (result) {
+        playerName = result.name;
+        combinedStats = mergeStats(combinedStats, result.stats);
+      }
+    }
+
+    if (playerName === "Unknown") {
+      return message.reply("❌ Could not read stats from images!");
     }
 
     data[playerName] = mergeStats(data[playerName] || {}, combinedStats);
@@ -74,6 +85,10 @@ client.on('messageCreate', async (message) => {
     const embed = new EmbedBuilder()
       .setTitle(`✅ Scanned ${attachments.length} Images`)
       .setDescription(`**${playerName}** stats saved!`)
+      .addFields(
+        { name: 'Passing YDS', value: `${data[playerName].Passing?.YARDS || 0}`, inline: true },
+        { name: 'TDS', value: `${(data[playerName].Passing?.TDS || 0) + (data[playerName].Receiving?.TDS || 0) + (data[playerName].Rushing?.TDS || 0)}`, inline: true }
+      )
       .setColor(0x00ff00);
     message.reply({ embeds: [embed] });
   }
@@ -89,12 +104,52 @@ function mergeStats(existing, newStats) {
   return existing;
 }
 
-function parseFakeStats(index) {
-  const mockData = [
-    { name: "Tom Brady", stats: { Passing: { CMP: 20, ATT: 30, YARDS: 250, TDS: 3, INTS: 1 } } },
-    { name: "Tom Brady", stats: { Rushing: { ATT: 2, YARDS: 5, TDS: 0 } } }
-  ];
-  return mockData[index % mockData.length];
+async function scanImage(imageUrl) {
+  try {
+    console.log("🤖 Scanning:", imageUrl);
+    const { data: { text } } = await Tesseract.recognize(imageUrl, 'eng');
+    console.log("📝 Found text:", text);
+    
+    return parseStats(text);
+  } catch (err) {
+    console.error("Scan error:", err);
+    return null;
+  }
+}
+
+function parseStats(text) {
+  const lines = text.toLowerCase().split('\n').filter(l => l.trim());
+  
+  let playerName = "Unknown";
+  let stats = {};
+  
+  // Look for player name (usually first line)
+  for (const line of lines.slice(0, 3)) {
+    if (!line.match(/\d/) && line.length > 2 && line.length < 30) {
+      playerName = line.charAt(0).toUpperCase() + line.slice(1);
+      break;
+    }
+  }
+  
+  // Parse numbers (key value pairs)
+  const numbers = text.match(/([a-z]+)\s+(\d+)/gi) || [];
+  
+  for (const num of numbers) {
+    const match = num.match(/([a-z]+)\s+(\d+)/i);
+    if (match) {
+      const key = match[1].toUpperCase();
+      const val = parseInt(match[2]);
+      
+      if (['CMP', 'ATT', 'YARDS', 'TDS', 'INTS', 'FUMBLES', 'RECS', 'SACKS', 'TACKLES'].includes(key)) {
+        if (!stats.Passing) stats.Passing = {};
+        stats.Passing[key] = val;
+      }
+    }
+  }
+  
+  if (Object.keys(stats).length === 0) return null;
+  
+  return { name: playerName, stats };
 }
 
 client.login(process.env.BOT_TOKEN);
