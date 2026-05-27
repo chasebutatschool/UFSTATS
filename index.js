@@ -1,6 +1,5 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const fs = require('fs-extra');
-require('dotenv').config();
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
@@ -22,7 +21,6 @@ client.on('messageCreate', async (message) => {
   const content = message.content;
   const data = await fs.readJson(DATA_FILE);
 
-  // !viewstats - Show all players
   if (content === '!viewstats') {
     const players = Object.keys(data);
     if (!players.length) return message.reply("No players found!");
@@ -34,7 +32,6 @@ client.on('messageCreate', async (message) => {
     message.reply({ embeds: [embed] });
   }
 
-  // !leaderboard - Rank by TDs
   if (content === '!leaderboard') {
     const leaders = Object.entries(data)
       .map(([name, stats]) => {
@@ -55,14 +52,13 @@ client.on('messageCreate', async (message) => {
     message.reply({ embeds: [embed] });
   }
 
-  // !scan - Scan images
   if (content.startsWith('!scan') && message.attachments.size > 0) {
     const attachments = [...message.attachments.values()];
     let combinedStats = {};
     let playerName = "Unknown";
 
     for (let i = 0; i < attachments.length; i++) {
-      const result = parseFakeStats(i, attachments.length);
+      const result = parseFakeStats(i);
       playerName = result.name;
       combinedStats = mergeStats(combinedStats, result.stats);
     }
@@ -88,7 +84,7 @@ function mergeStats(existing, newStats) {
   return existing;
 }
 
-function parseFakeStats(index, total) {
+function parseFakeStats(index) {
   const mockData = [
     { name: "Tom Brady", stats: { Passing: { CMP: 20, ATT: 30, YARDS: 250, TDS: 3, INTS: 1 } } },
     { name: "Tom Brady", stats: { Rushing: { ATT: 2, YARDS: 5, TDS: 0 } } }
