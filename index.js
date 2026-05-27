@@ -64,23 +64,19 @@ client.on('messageCreate', async (message) => {
     const attachments = [...message.attachments.values()];
     let combinedStats = {};
     let playerName = "Unknown";
-    let rawText = "";
 
     for (let i = 0; i < attachments.length; i++) {
       const url = attachments[i].url;
       const result = await scanImage(url);
       
       if (result) {
-        rawText += result.rawText + "\n";
         playerName = result.name;
         combinedStats = mergeStats(combinedStats, result.stats);
       }
     }
 
-    console.log("Raw text found:", rawText);
-
     if (playerName === "Unknown") {
-      return message.reply("❌ Could not read player name!");
+      return message.reply("❌ Could not read player name! Try scanning again.");
     }
 
     data[playerName] = mergeStats(data[playerName] || {}, combinedStats);
@@ -116,90 +112,90 @@ function mergeStats(existing, newStats) {
 
 async function scanImage(imageUrl) {
   try {
-    console.log("🤖 Scanning:", imageUrl);
     const { data: { text } } = await Tesseract.recognize(imageUrl, 'eng');
-    console.log("📝 Raw text:", text);
-    return parseStats(text);
+    return parseTableStats(text);
   } catch (err) {
     console.error("Scan error:", err);
     return null;
   }
 }
 
-function parseStats(text) {
-  const lines = text.split('\n').filter(l => l.trim());
+function parseTableStats(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   let playerName = "Unknown";
   let stats = {};
+  let currentCategory = null;
   
-  // Find player name (first non-number line)
-  for (const line of lines.slice(0, 5)) {
-    const clean = line.trim();
-    if (clean.length > 2 && clean.length < 30 && !clean.match(/^\d/) && !clean.match(/[0-9]{4,}/)) {
-      playerName = clean.replace(/[^a-zA-Z ]/g, '').trim();
-      if (playerName.length > 1) break;
+  // Column mappings
+  const passingCols = ['CMP', 'ATT', 'YARDS', 'TDS', 'INTS', 'FUMBLES'];
+  const receivingCols = ['RECS', 'YARDS', 'TDS', 'FUMBLES'];
+  const rushingCols = ['ATT', 'YARDS', 'TDS', 'FUMBLES'];
+  const defenseCols = ['TACKLES', 'SACKS', 'INT', 'DEFLECTIONS', 'FUMBLES'];
+  
+  // Find category
+  for (const line of lines) {
+    const upper = line.toUpperCase();
+    
+    if (upper.includes('PASSING')) currentCategory = 'Passing';
+    else if (upper.includes('RECEIVING')) currentCategory = 'Receiving';
+    else if (upper.includes('RUSHING')) currentCategory = 'Rushing';
+    else if (upper.includes('DEFENSE') || upper.includes('D-LINE') || upper.includes('CORNERBACK')) {
+      currentCategory = 'Defense';
+    }
+    // Check if line has player name (text then numbers)
+    else if (currentCategory && line.match(/^[A-Za-z].+\d+/)) {
+      // This is a data row!
+      const parts = line.split(/\s+/).filter(p => p);
+      
+      // First part is usually player name, rest are numbers
+      if (playerName === "Unknown" && parts.length > 1) {
+        // Check if first part looks like a name
+        if (!parts[0].match(/^\d+$/)) {
+          playerName = parts[0].replace(/[^a-zA-Z]/g, '');
+        }
+      }
+      
+      // Get all numbers from the line
+      const numbers = line.match(/\d+/g) || [];
+      
+      if (currentCategory === 'Passing' && numbers.length >= 2) {
+        stats.Passing = {
+          CMP: parseInt(numbers[0]) || 0,
+          ATT: parseInt(numbers[1]) || 0,
+          YARDS: parseInt(numbers[2]) || 0,
+          TDS: parseInt(numbers[3]) || 0,
+          INTS: parseInt(numbers[4]) || 0
+        };
+      }
+      else if (currentCategory === 'Receiving' && numbers.length >= 2) {
+        stats.Receiving = {
+          RECS: parseInt(numbers[0]) || 0,
+          YARDS: parseInt(numbers[1]) || 0,
+          TDS: parseInt(numbers[2]) || 0
+        };
+      }
+      else if (currentCategory === 'Rushing' && numbers.length >= 2) {
+        stats.Rushing = {
+          ATT: parseInt(numbers[0]) || 0,
+          YARDS: parseInt(numbers[1]) || 0,
+          TDS: parseInt(numbers[2]) || 0
+        };
+      }
+      else if (currentCategory === 'Defense' && numbers.length >= 2) {
+        stats.Defense = {
+          TACKLES: parseInt(numbers[0]) || 0,
+          SACKS: parseInt(numbers[1]) || 0,
+          INT: parseInt(numbers[2]) || 0
+        };
+      }
     }
   }
   
-  // Look for stat patterns (letters followed by numbers)
-  const allText = text.toUpperCase();
-  
-  // Passing stats
-  if (allText.includes('PASSING') || allText.includes('CMP') || allText.includes('ATT')) {
-    stats.Passing = {};
-    const cmp = text.match(/CMP[\s:]*(\d+)/i) || text.match(/(\d+)\s*\/\s*\d+/i);
-    const att = text.match(/ATT[\s:]*(\d+)/i);
-    const yds = text.match(/YARDS?[\s:]*(\d+)/i) || text.match(/YDS[\s:]*(\d+)/i);
-    const tds = text.match(/TD[S]?[\s:]*(\d+)/i);
-    const ints = text.match(/INT[S]?[\s:]*(\d+)/i);
-    
-    if (cmp) stats.Passing.CMP = parseInt(cmp[1] || cmp[0]);
-    if (att) stats.Passing.ATT = parseInt(att[1]);
-    if (yds) stats.Passing.YARDS = parseInt(yds[1] || yds[0]);
-    if (tds) stats.Passing.TDS = parseInt(tds[1] || tds[0]);
-    if (ints) stats.Passing.INTS = parseInt(ints[1] || ints[0]);
-  }
-  
-  // Receiving stats
-  if (allText.includes('RECEIVING') || allText.includes('REC')) {
-    stats.Receiving = {};
-    const rec = text.match(/REC(?:S)?[\s:]*(\d+)/i);
-    const yds = text.match(/YARDS?[\s:]*(\d+)/i);
-    const tds = text.match(/TD[S]?[\s:]*(\d+)/i);
-    
-    if (rec) stats.Receiving.RECS = parseInt(rec[1] || rec[0]);
-    if (yds) stats.Receiving.YARDS = parseInt(yds[1] || yds[0]);
-    if (tds) stats.Receiving.TDS = parseInt(tds[1] || tds[0]);
-  }
-  
-  // Rushing stats
-  if (allText.includes('RUSHING')) {
-    stats.Rushing = {};
-    const att = text.match(/ATT[\s:]*(\d+)/i);
-    const yds = text.match(/YARDS?[\s:]*(\d+)/i);
-    const tds = text.match(/TD[S]?[\s:]*(\d+)/i);
-    
-    if (att) stats.Rushing.ATT = parseInt(att[1]);
-    if (yds) stats.Rushing.YARDS = parseInt(yds[1] || yds[0]);
-    if (tds) stats.Rushing.TDS = parseInt(tds[1] || tds[0]);
-  }
-  
-  // Defense stats
-  if (allText.includes('TACKLES') || allText.includes('SACKS')) {
-    stats.Defense = {};
-    const tk = text.match(/TACKLES?[\s:]*(\d+)/i);
-    const sk = text.match(/SACKS?[\s:]*(\d+)/i);
-    const ints = text.match(/INT[S]?[\s:]*(\d+)/i);
-    
-    if (tk) stats.Defense.TACKLES = parseInt(tk[1] || tk[0]);
-    if (sk) stats.Defense.SACKS = parseInt(sk[1] || sk[0]);
-    if (ints) stats.Defense.INT = parseInt(ints[1] || ints[0]);
-  }
-  
-  console.log("Parsed stats:", JSON.stringify(stats));
+  console.log("Parsed:", playerName, stats);
   
   if (Object.keys(stats).length === 0) return null;
   
-  return { name: playerName, stats: stats, rawText: text };
+  return { name: playerName, stats: stats };
 }
 
 client.login(process.env.BOT_TOKEN);
